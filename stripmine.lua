@@ -212,6 +212,8 @@ end
 ---@return boolean success Whether or not the turtle successfully turned to face the direction.
 ---@return string? reason The reason for failure, if any.
 local function face(direction)
+  direction = direction % 4 -- Ensure the direction is within the range of 0-3
+
   -- If already facing the direction, do nothing.
   if facing == direction then
     return true
@@ -337,20 +339,26 @@ end
 --- Moves to a position, mining along its way (gravity-block protected).
 ---@param offset stripmine.Position The position to move to.
 local function mine_to(offset)
+  --- Counts the number of failed movements. If we fail to move too many times, we give up so we don't infinitely loop.
   local fail_count = 0
 
-  ---@TODO Check over this function!
-
+  -- Move to the given position, digging as we go.
   move_to_yxz(offset, dig_around, function()
+    -- On fail, increment the fail count.
     fail_count = fail_count + 1
 
+    -- However, if we're able to dig, reset the fail count.
+    -- This allows us to not error out when there's a bunch of gravel or sand in the way.
     if turtle.dig() then
       fail_count = 0
     end
 
+    -- If we fail too many times, give up.
     if fail_count > 5 then
       return false
     end
+
+    -- Otherwise, we can try to move again.
     return true
   end)
 
@@ -369,21 +377,31 @@ end
 local function dig_tunnel(length)
   local turn_f = turn_right
 
+  --- Turns the turtle around, lining up for the next section of the tunnel.
+  ---@return boolean success Whether or not the turtle successfully turned around.
   local function turn()
     turn_f()
-    mine_to(simulate_movement("forward"))
+    if not mine_to(simulate_movement("forward")) then
+      return false
+    end
     turn_f()
 
     turn_f = turn_f == turn_right and turn_left or turn_right
+    return true
   end
 
-
+  -- For each row of the tunnel, mine forward, then turn around.
   for i = 1, 3 do
+    -- Dig to the end of the row.
     if not mine_to(simulate_movement("forward", i == 1 and length or length - 1)) then
-      return false
+      return false, "Failed to mine to position at row " .. i
     end
+
+    -- If this isn't the last row, turn around.
     if i < 3 then
-      turn()
+      if not turn() then
+        return false, "Failed to turn around after mining row " .. i
+      end
     end
   end
 
@@ -393,3 +411,33 @@ end
 
 
 --#endregion Turtle Mining Utilities
+
+
+
+-- Testing
+
+local function lazy_moveto(pos)
+  move_to_yxz(pos, function(pos) print(textutils.serialize(pos, {compact = true})) end, function(pos, reason)
+    print("Failed to move to position: " .. textutils.serialize(pos, {compact = true}) .. ", reason: " .. reason)
+    return false
+  end)
+end
+
+--lazy_moveto({x=-1, y=0,z=-1})
+
+--sleep(1)
+
+local function lazy_mineto(pos)
+  local success = mine_to(pos)
+  if not success then
+    print("Failed to mine to position: " .. textutils.serialize(pos, {compact = true}))
+  else
+    print("Successfully mined to position: " .. textutils.serialize(pos, {compact = true}))
+  end
+end
+
+dig_tunnel(15)
+
+-- Return home
+lazy_moveto({x=0, y=0,z=0})
+face(FACINGS.NORTH)
