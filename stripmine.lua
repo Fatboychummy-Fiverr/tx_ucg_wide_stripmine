@@ -59,6 +59,42 @@ local FACINGS = {
 local position = {x = 0, y = 0, z = 0}
 
 
+
+--- Simulates a movement in the given direction, returns the new position.
+---@param direction "forward"|"back" The direction to simulate the movement in.
+---@param n integer? The number of blocks to move in the given direction. Defaults to 1.
+---@return stripmine.Position new_position The new position after the simulated movement.
+local function simulate_movement(direction, n)
+  local new_position = {x = position.x, y = position.y, z = position.z}
+  n = n or 1
+
+  if direction == "forward" then
+    if facing == 0 then -- North, -Z
+      new_position.z = new_position.z - n
+    elseif facing == 1 then -- East, +X
+      new_position.x = new_position.x + n
+    elseif facing == 2 then -- South, +Z
+      new_position.z = new_position.z + n
+    elseif facing == 3 then -- West, -X
+      new_position.x = new_position.x - n
+    end
+  elseif direction == "back" then
+    if facing == 0 then -- North, -Z
+      new_position.z = new_position.z + n
+    elseif facing == 1 then -- East, +X
+      new_position.x = new_position.x - n
+    elseif facing == 2 then -- South, +Z
+      new_position.z = new_position.z - n
+    elseif facing == 3 then -- West, -X
+      new_position.x = new_position.x + n
+    end
+  end
+
+  return new_position
+end
+
+
+
 --- Updates the turtle's position based on the current facing, and movement direction.
 ---@param direction "forward"|"back" The direction to update the position in.
 local function update_position(direction)
@@ -203,7 +239,7 @@ end
 --- Moves to a position relative to the turtle's starting position, moving along the Y axis first, then the X and Z axes.
 ---@param offset stripmine.Position The offset to move to.
 ---@param move_callback fun(pos:stripmine.Position):nil The callback function to call before each move.
----@param move_fail_callback fun(pos:stripmine.Position, reason:string):boolean The callback function to call if a move fails. If no callback is present, the function will return immediately. If the callback returns a falsey value, the function will return immediately.
+---@param move_fail_callback nil|fun(pos:stripmine.Position, reason:string):boolean The callback function to call if a move fails. If no callback is present, the function will return immediately. If the callback returns a falsey value, the function will return immediately.
 ---@return boolean success Whether or not the turtle successfully moved to the position.
 ---@return string? reason The reason for failure, if any.
 ---@return stripmine.Position? final_position The final position of the turtle after the move, if failed.
@@ -211,12 +247,16 @@ local function move_to_yxz(offset, move_callback, move_fail_callback)
   ---@TODO Check over this function!
   ---@TODO Test this function!
 
+  --- Move using the given function `f` (i.e: forward, etc), calling the callbacks as needed.
   local function move(f)
     move_callback(position)
+
     local success, reason = f()
-    if not success and move_fail_callback then
+    if not success and move_fail_callback then ---@cast reason -nil
       return move_fail_callback(position, reason)
     end
+
+    return success, reason
   end
 
   -- # Handle Y movement.
@@ -316,6 +356,36 @@ local function mine_to(offset)
 
   -- Dig the last position's up and down to finish the tunnel.
   dig_up_down()
+
+  return true
+end
+
+
+
+--- Digs a 3x3 tunnel in the direction the turtle is facing, to the right.
+---@param length integer The length of the tunnel to dig.
+---@return boolean success Whether or not the turtle successfully dug the tunnel.
+---@return string? reason The reason for failure, if any.
+local function dig_tunnel(length)
+  local turn_f = turn_right
+
+  local function turn()
+    turn_f()
+    mine_to(simulate_movement("forward"))
+    turn_f()
+
+    turn_f = turn_f == turn_right and turn_left or turn_right
+  end
+
+
+  for i = 1, 3 do
+    if not mine_to(simulate_movement("forward", i == 1 and length or length - 1)) then
+      return false
+    end
+    if i < 3 then
+      turn()
+    end
+  end
 
   return true
 end
