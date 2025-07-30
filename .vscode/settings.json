@@ -1,0 +1,32 @@
+{
+  "Lua.workspace.library": [
+    "C:/etc/GitThings/Language Server Libraries/CC-Tweaked"
+  ],
+
+  "relint": {
+        "language": "lua",
+        "rules": [
+            {
+                "name": "Fixme Messages",
+                "description": "Detects 'FIXME' comments in the code.",
+                "severity": "Warning",
+                "pattern": "FIXME",
+                "message": "Address this FIXME comment."
+            },
+            {
+                "name": "Todo Messages",
+                "description": "Detects 'TODO' comments in the code.",
+                "severity": "Information",
+                "pattern": "TODO",
+                "message": "Address this TODO comment.",
+            },
+            {
+                "name": "Trailing Whitespace",
+                "description": "Detects spaces before newlines.",
+                "severity": "Information",
+                "pattern": " +$",
+                "message": "Remove trailing spaces before newlines.",
+            }
+        ]
+    },
+}
