@@ -333,31 +333,86 @@ end
 
 
 
+--- Finds an item in the turtle's inventory.
+---@param item_name string The name of the item to find.
+---@return integer? slot The slot number of the item, or nil if not found.
+local function find_item(item_name)
+  for i = 1, 16 do
+    local item = turtle.getItemDetail(i)
+    if item and item.name == item_name then
+      return i
+    end
+  end
+end
+
+
+
+--- Places a torch.
+local function place_torch()
+  local torch_slot = find_item("minecraft:torch")
+  if not torch_slot then
+    return
+  end
+
+  turtle.select(torch_slot)
+  turtle.placeDown()
+  turtle.select(1) -- Reset to the first slot after placing the torch.
+end
+
+
+
 --- Moves to a position, mining along its way (gravity-block protected).
 ---@param offset stripmine.Position The position to move to.
-local function mine_to(offset)
+---@param place_torches boolean? Whether or not to place torches in the tunnel. Defaults to false.
+---@param torch_interval integer? The interval at which to place torches. Defaults to 10
+---@return boolean success Whether or not the turtle successfully moved to the position.
+local function mine_to(offset, place_torches, torch_interval)
+  torch_interval = torch_interval or 10
+
   --- Counts the number of failed movements. If we fail to move too many times, we give up so we don't infinitely loop.
   local fail_count = 0
+  local mined = 0
 
-  -- Move to the given position, digging as we go.
-  move_to_yxz(offset, dig_around, function()
+  --- Called before the turtle moves in each position.
+  --- 1. Digs around the turtle.
+  --- 2. Places a torch if needed.
+  local function mine_move_callback()
+    dig_around()
+
+    if place_torches and (mined - 1) % torch_interval == 0 then
+      place_torch()
+    end
+
+    mined = mined + 1
+  end
+
+
+  --- Called when the turtle fails to move.
+  --- 1. Digs the block in front of the turtle.
+  --- 2. If it fails, it increments the fail count and checks if it should continue.
+  local function mine_move_fail_callback(pos, reason)
     -- On fail, increment the fail count.
     fail_count = fail_count + 1
 
     -- However, if we're able to dig, reset the fail count.
-    -- This allows us to not error out when there's a bunch of gravel or sand in the way.
+    -- This stops us from erroring out when there's a bunch of gravel or sand in the way.
     if turtle.dig() then
       fail_count = 0
     end
 
     -- If we fail too many times, give up.
     if fail_count > 5 then
-      return false
+      return false, "Failed to move to position after too many attempts: " .. reason
     end
 
     -- Otherwise, we can try to move again.
     return true
-  end)
+  end
+
+  -- Move to the given position, digging as we go.
+  if not move_to_yxz(offset, mine_move_callback, mine_move_fail_callback) then
+    return false
+  end
 
   -- Dig the last position's up and down to finish the tunnel.
   dig_up_down()
@@ -392,7 +447,14 @@ local function dig_tunnel(length, place_torches, torch_interval)
   -- For each row of the tunnel, mine forward, then turn around.
   for i = 1, 3 do
     -- Dig to the end of the row.
-    if not mine_to(simulate_movement("forward", i == 1 and length or length - 1)) then
+    if not mine_to(
+      -- Mine to the simulated position
+      simulate_movement("forward", i == 1 and length or length - 1),
+
+      -- Place torches if needed, and if this is the middle row.
+      place_torches and i == 2,
+      torch_interval
+    ) then
       return false, "Failed to mine to position at row " .. i
     end
 
@@ -426,9 +488,74 @@ local function dig_stripmine(length, branch_length, branch_distance, place_torch
   if not success then
     return false, "Failed to dig main tunnel: " .. (reason or "unknown error")
   end
+
+  -- Dig the branches.
+
+  -- First, calculate the number of branches based on the length and distance.
+  local branch_count = math.floor(length / branch_distance)
+  -- The branches are only 3 wide, so we can fit an extra branch even if we don't have enough length to fit the entire branch gap.
+  if length % branch_distance >= 3 then
+    branch_count = branch_count + 1
+  end
+
+  -- The turtle starts at the end of the main tunnel on its right side.
+  -- We can be a bit more efficient by mining the first branch immediately at the end of the main tunnel.
+  -- But we need to know how far the turtle is from the start of the main tunnel, so we can offset the 
+  -- branch positions correctly.
+
+  -- Since we consider the turtle's start facing to be north (-Z), we know that the branches on the right side of the tunnel
+  -- are at X = 2, and the branches on the left side are at X = 0.
+  -- We start the branches at Z = -4, and move deeper into the tunnel as we go.
+  -- Thus, the formula for position.z should be `branch[n].z = -(4 + (n - 1) * branch_distance)`.
+  --
+  -- However, note that we are starting at the left side of the branch each time, so we need to
+  -- adjust the starting Z position to -2 when on the left side.
+
+  --- Calculate the position of a branch given its index and side.
+  ---@param index integer The index of the branch (1-based).
+  ---@param side integer The side of the branch (0 for left, 2 for right).
+  ---@return stripmine.Position branch_pos The position of the branch.
+  local function get_branch_pos(index, side)
+    return {
+      x = side,
+      y = position.y,
+      z = -((side == 2 and 4 or 2) + (index - 1) * branch_distance)
+    }
+  end
+
+  -- And now, we can dig the branches.
+
+  -- First, the right side, deep to shallow.
+  for i = branch_count, 1, -1 do
+    local branch_pos = get_branch_pos(i, 2) -- Right side is +X (2)
+    if not move_to_yxz(branch_pos, function() end, function() return false end) then
+      return false, "Failed to move to branch position at index " .. i .. " on the right side"
+    end
+    face(FACINGS.POSX) -- Face into the branch.
+
+    -- Dig the branch.
+    if not dig_tunnel(branch_length, place_torches, torch_interval) then
+      return false, "Failed to dig branch at index " .. i .. " on the right side"
+    end
+  end
+
+  -- Mine the left side, shallow to deep.
+  for i = 1, branch_count do
+    local branch_pos = get_branch_pos(i, 0) -- Left side is -X
+    if not move_to_yxz(branch_pos, function() end, function() return false end) then
+      return false, "Failed to move to branch position at index " .. i .. " on the left side"
+    end
+    face(FACINGS.NEGX) -- Face into the branch.
+
+    -- Dig the branch.
+    if not dig_tunnel(branch_length, place_torches, torch_interval) then
+      return false, "Failed to dig branch at index " .. i .. " on the left side"
+    end
+  end
+
+  -- Return home.
+  return move_to_yxz({x=0, y=0,z=0}, function() end, function() return false end)
 end
-
-
 
 --#endregion Turtle Mining Utilities
 
@@ -456,7 +583,7 @@ local function lazy_mineto(pos)
   end
 end
 
-dig_tunnel(15)
+dig_stripmine(17, 10, 4, true, 5)
 
 -- Return home
 lazy_moveto({x=0, y=0,z=0})
