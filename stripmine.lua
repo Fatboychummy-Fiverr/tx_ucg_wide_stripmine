@@ -246,9 +246,6 @@ end
 ---@return string? reason The reason for failure, if any.
 ---@return stripmine.Position? final_position The final position of the turtle after the move, if failed.
 local function move_to_yxz(offset, move_callback, move_fail_callback)
-  ---@TODO Check over this function!
-  ---@TODO Test this function!
-
   --- Move using the given function `f` (i.e: forward, etc), calling the callbacks as needed.
   local function move(f)
     move_callback(position)
@@ -372,9 +369,11 @@ end
 
 --- Digs a 3x3 tunnel in the direction the turtle is facing, to the right.
 ---@param length integer The length of the tunnel to dig.
+---@param place_torches boolean? Whether or not to place torches in the tunnel. Defaults to false.
+---@param torch_interval integer? The interval at which to place torches. Defaults to 10
 ---@return boolean success Whether or not the turtle successfully dug the tunnel.
 ---@return string? reason The reason for failure, if any.
-local function dig_tunnel(length)
+local function dig_tunnel(length, place_torches, torch_interval)
   local turn_f = turn_right
 
   --- Turns the turtle around, lining up for the next section of the tunnel.
@@ -406,6 +405,27 @@ local function dig_tunnel(length)
   end
 
   return true
+end
+
+
+
+--- Digs a stripmine tunnel, with branches.
+---@param length integer The length of the main tunnel.
+---@param branch_length integer The length of the branches.
+---@param branch_distance integer? The distance between branches. This includes the width of each branch. Defaults to 5 (one block gap between branches).
+---@param place_torches boolean? Whether or not to place torches in the tunnel. Defaults to false.
+---@param torch_interval integer? The interval at which to place torches. Defaults to 10.
+---@return boolean success Whether or not the turtle successfully dug the stripmine.
+---@return string? reason The reason for failure, if any.
+local function dig_stripmine(length, branch_length, branch_distance, place_torches, torch_interval)
+  branch_distance = branch_distance or 5
+  torch_interval = torch_interval or 10
+
+  -- Dig the main tunnel.
+  local success, reason = dig_tunnel(length, place_torches, torch_interval)
+  if not success then
+    return false, "Failed to dig main tunnel: " .. (reason or "unknown error")
+  end
 end
 
 
