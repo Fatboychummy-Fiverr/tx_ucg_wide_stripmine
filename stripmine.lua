@@ -122,6 +122,11 @@ local function update_position(direction)
 end
 
 
+--- Predeclared function so we can use it in the movement functions.
+---@type fun()
+local checks
+
+
 
 --- Moves the turtle forward, keeping track of its position. Returns the output of `turtle.forward()`.
 ---@return boolean success Whether or not the turtle successfully moved forward.
@@ -131,6 +136,8 @@ local function forward()
   if success then
     update_position("forward")
   end
+
+  checks()
 
   return success, reason
 end
@@ -145,6 +152,8 @@ local function back()
   if success then
     update_position("back")
   end
+
+  checks()
 
   return success, reason
 end
@@ -188,6 +197,8 @@ local function up()
     position.y = position.y + 1
   end
 
+  checks()
+
   return success, reason
 end
 
@@ -201,6 +212,8 @@ local function down()
   if success then
     position.y = position.y - 1
   end
+
+  checks()
 
   return success, reason
 end
@@ -438,6 +451,84 @@ local function move_to_yxz(offset, move_callback, move_fail_callback)
 
   -- Great success!
   return true
+end
+
+
+
+--- Simple method to move the turtle to 0,0,0 and face south (towards the storage chest).
+---@return boolean success Whether or not the turtle successfully moved to the home position.
+---@return string? error_message If it failed.
+---@return stripmine.Position? final_position The final position of the turtle after the move, if failed.
+local function return_home()
+  ---@TODO If we're returning home while moving towards the central shaft, it means we likely have blocks in our way!
+  ---@TODO We can either handle this by digging the blocks in our way, or by moving to the side one block, then continuing.
+  ---@TODO Determine the above.
+
+  -- Move to the home position (0,0,0).
+  local success, reason, final_pos = move_to_yxz({x = 0, y = 0, z = 0}, function() end, function() return false end)
+  if not success then ---@cast reason -nil
+    return false, reason, final_pos
+  end
+
+  -- Face south (towards the storage chest).
+  return face(FACINGS.SOUTH)
+end
+
+
+
+--- Dumps the turtle's inventory into the storage chest at the home position (0,0,0).
+local function dump_inventory()
+  -- Ensure we're at the home position.
+  if position.x ~= 0 or position.y ~= 0 or position.z ~= 0 then
+    return false, "Turtle is not at the home position (0,0,0), cannot dump inventory."
+  end
+
+  -- For each slot with an item, drop it into the storage chest.
+  for i = 1, 16 do
+    if turtle.getItemCount(i) > 0 then
+      turtle.select(i)
+      -- Keep attempting to drop the item until it succeeds.
+      while not turtle.drop() do
+        print("Storage chest is full, waiting for it to be cleared...")
+        sleep(5)
+      end
+    end
+  end
+
+  turtle.select(1)
+end
+
+
+
+--- Runs all checks, returns home for fuel or full inventory if needed.
+checks = function()
+  local manhattan_distance = math.abs(position.x) + math.abs(position.y) + math.abs(position.z)
+  local fuel = turtle.getFuelLevel()
+  local current_facing = facing
+  local current_position = {x = position.x, y = position.y, z = position.z}
+
+  local function back()
+    assert(move_to_yxz({x = 0, y = 0, z = 0}, function() end, function() return false end))
+    assert(face(FACINGS.SOUTH)) -- Face south (towards the storage chest).
+  end
+
+  -- If the turtle is low on fuel, return home, then return back to the current position and continue.
+  if manhattan_distance >= fuel + 10 then -- We keep a buffer of at least 10 extra fuel, in case we somehow miscalculated.
+    assert(return_home())
+    assert(refuel(manhattan_distance + 100)) -- Refuel to at least the distance we need to travel, plus a buffer of 100 fuel.
+    back() -- Return to the position we were at before.
+    return
+  end
+
+  -- If the turtle's inventory is full, return home, dump items, then return back.
+  --   We keep the selected slot as 1, so incoming items always fill from slot 1.
+  --   Thus, if any items are present in slot 16, we can assume the inventory is full.
+  if turtle.getItemCount(16) > 0 then
+    assert(return_home())
+    dump_inventory()
+    back() -- Return to the position we were at before.
+    return
+  end
 end
 
 
