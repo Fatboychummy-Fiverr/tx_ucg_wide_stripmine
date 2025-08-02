@@ -122,6 +122,11 @@ local function update_position(direction)
 end
 
 
+--- Predeclared function so we can use it in the movement functions.
+---@type fun()
+local checks
+
+
 
 --- Moves the turtle forward, keeping track of its position. Returns the output of `turtle.forward()`.
 ---@return boolean success Whether or not the turtle successfully moved forward.
@@ -131,6 +136,8 @@ local function forward()
   if success then
     update_position("forward")
   end
+
+  checks()
 
   return success, reason
 end
@@ -145,6 +152,8 @@ local function back()
   if success then
     update_position("back")
   end
+
+  checks()
 
   return success, reason
 end
@@ -188,6 +197,8 @@ local function up()
     position.y = position.y + 1
   end
 
+  checks()
+
   return success, reason
 end
 
@@ -201,6 +212,8 @@ local function down()
   if success then
     position.y = position.y - 1
   end
+
+  checks()
 
   return success, reason
 end
@@ -233,6 +246,132 @@ local function face(direction)
     end
   until facing == direction
 
+  return true
+end
+
+
+
+--- Refuels the turtle from inventories at the home position (0,0,0).
+---@param minimum_fuel integer The minimum amount of fuel the turtle should have after refueling.
+---@return boolean can_continue Whether or not the turtle can continue after refueling.
+local function refuel(minimum_fuel)
+  if position.x ~= 0 or position.y ~= 0 or position.z ~= 0 then
+    return false
+  end
+
+  -- List of items that can be used as fuel, in order that we prefer them to be used.
+  ---@type string[]
+  local fuel_items = {
+    "minecraft:coal_block",
+    "minecraft:lava_bucket",
+    "minecraft:blaze_rod",
+    "minecraft:charcoal",
+    "minecraft:coal",
+    "minecraft:.*planks",
+    "minecraft:.*log",
+    "minecraft:stick",
+  }
+  local fuel_item_lookup = {}
+  for _, item in ipairs(fuel_items) do
+    fuel_item_lookup[item] = true
+  end
+
+
+  --- Locate the first empty slot in an inventory.
+  ---@param list ccTweaked.peripheral.itemList The list of items in the inventory.
+  ---@param inv ccTweaked.peripheral.Inventory The inventory to search in.
+  ---@return integer? slot The slot number of the first empty slot, or nil if no empty slot is found.
+  local function find_empty_slot(list, inv)
+    for slot = 1, inv.size() do
+      if not list[slot] then
+        return slot
+      end
+    end
+  end
+
+  --- Moves an item in a given inventory to the first slot, moving that item out of the way if needed.
+  ---@param list ccTweaked.peripheral.itemList The list of items in the inventory.
+  ---@param inv ccTweaked.peripheral.Inventory The inventory to move the item in.
+  ---@param slot integer The slot of the item to move.
+  ---@return boolean success Whether or not the item was successfully moved.
+  local function move_to_one(list, inv, slot)
+    if not list[slot] then
+      return false
+    end
+
+    -- If the item is already in the first slot, do nothing.
+    if slot == 1 then
+      return true
+    end
+
+    -- Check if an item is already in the first slot.
+    if list[1] then
+      -- If so, we need to move it out of the way.
+      local empty_slot = find_empty_slot(list, inv)
+      if not empty_slot then
+        return false -- No empty slot found, can't move the item.
+      end
+
+      -- Move the item in the first slot to the empty slot.
+      inv.pushItems(peripheral.getName(inv), 1, nil, empty_slot)
+    end
+
+    -- Now we can move the item to the first slot.
+    inv.pushItems(peripheral.getName(inv), slot, nil, 1)
+    return true
+  end
+
+  --- Attempts to refuel by 'eating' all fuel items in the turtle's inventory.
+  local function eat()
+    for i = 1, 16 do
+      local detail = turtle.getItemDetail(i)
+      if detail and fuel_item_lookup[detail.name] then
+        turtle.select(i)
+        turtle.refuel()
+      end
+    end
+  end
+
+
+  --- Attempts to refuel the turtle from the given side.
+  ---@param side "top"|"front" The side to refuel from.
+  ---@return boolean success Whether or not the turtle successfully refueled.
+  local function _refuel(side)
+    -- If the given side is not a valid inventory, we can't refuel from it.
+    if not peripheral.hasType(side, "inventory") then
+      return false
+    end
+
+    -- Get the inventory on the given side.
+    local inv = peripheral.wrap(side) --[[@as ccTweaked.peripheral.Inventory?]]
+    if not inv then
+      return false
+    end
+
+    -- Get the list, and find fuel items.
+    local list = inv.list()
+    for slot, item in pairs(list) do
+      for _, fuel in ipairs(fuel_items) do
+        if item.name:match(fuel) then
+          -- Valid fuel item, move it to the first slot, then call `turtle.suck()` to pull it into the turtle's inventory.
+          if move_to_one(list, inv, slot) then
+            if side == "top" then turtle.suckUp() else turtle.suck() end
+          end
+        end
+      end
+    end
+
+    -- Eat fuel items that were pulled into the turtle's inventory.
+    eat()
+
+    -- Check if we have enough fuel to continue.
+    return turtle.getFuelLevel() >= minimum_fuel
+  end
+
+  -- Prefer refuelling from the top.
+  if not _refuel("top") then
+    return _refuel("front")
+  end
   return true
 end
 
@@ -312,6 +451,84 @@ local function move_to_yxz(offset, move_callback, move_fail_callback)
 
   -- Great success!
   return true
+end
+
+
+
+--- Simple method to move the turtle to 0,0,0 and face south (towards the storage chest).
+---@return boolean success Whether or not the turtle successfully moved to the home position.
+---@return string? error_message If it failed.
+---@return stripmine.Position? final_position The final position of the turtle after the move, if failed.
+local function return_home()
+  ---@TODO If we're returning home while moving towards the central shaft, it means we likely have blocks in our way!
+  ---@TODO We can either handle this by digging the blocks in our way, or by moving to the side one block, then continuing.
+  ---@TODO Determine the above.
+
+  -- Move to the home position (0,0,0).
+  local success, reason, final_pos = move_to_yxz({x = 0, y = 0, z = 0}, function() end, function() return false end)
+  if not success then ---@cast reason -nil
+    return false, reason, final_pos
+  end
+
+  -- Face south (towards the storage chest).
+  return face(FACINGS.SOUTH)
+end
+
+
+
+--- Dumps the turtle's inventory into the storage chest at the home position (0,0,0).
+local function dump_inventory()
+  -- Ensure we're at the home position.
+  if position.x ~= 0 or position.y ~= 0 or position.z ~= 0 then
+    return false, "Turtle is not at the home position (0,0,0), cannot dump inventory."
+  end
+
+  -- For each slot with an item, drop it into the storage chest.
+  for i = 1, 16 do
+    if turtle.getItemCount(i) > 0 then
+      turtle.select(i)
+      -- Keep attempting to drop the item until it succeeds.
+      while not turtle.drop() do
+        print("Storage chest is full, waiting for it to be cleared...")
+        sleep(5)
+      end
+    end
+  end
+
+  turtle.select(1)
+end
+
+
+
+--- Runs all checks, returns home for fuel or full inventory if needed.
+checks = function()
+  local manhattan_distance = math.abs(position.x) + math.abs(position.y) + math.abs(position.z)
+  local fuel = turtle.getFuelLevel()
+  local current_facing = facing
+  local current_position = {x = position.x, y = position.y, z = position.z}
+
+  local function back()
+    assert(move_to_yxz({x = 0, y = 0, z = 0}, function() end, function() return false end))
+    assert(face(FACINGS.SOUTH)) -- Face south (towards the storage chest).
+  end
+
+  -- If the turtle is low on fuel, return home, then return back to the current position and continue.
+  if manhattan_distance >= fuel + 10 then -- We keep a buffer of at least 10 extra fuel, in case we somehow miscalculated.
+    assert(return_home())
+    assert(refuel(manhattan_distance + 100)) -- Refuel to at least the distance we need to travel, plus a buffer of 100 fuel.
+    back() -- Return to the position we were at before.
+    return
+  end
+
+  -- If the turtle's inventory is full, return home, dump items, then return back.
+  --   We keep the selected slot as 1, so incoming items always fill from slot 1.
+  --   Thus, if any items are present in slot 16, we can assume the inventory is full.
+  if turtle.getItemCount(16) > 0 then
+    assert(return_home())
+    dump_inventory()
+    back() -- Return to the position we were at before.
+    return
+  end
 end
 
 
@@ -500,7 +717,7 @@ local function dig_stripmine(length, branch_length, branch_distance, place_torch
 
   -- The turtle starts at the end of the main tunnel on its right side.
   -- We can be a bit more efficient by mining the first branch immediately at the end of the main tunnel.
-  -- But we need to know how far the turtle is from the start of the main tunnel, so we can offset the 
+  -- But we need to know how far the turtle is from the start of the main tunnel, so we can offset the
   -- branch positions correctly.
 
   -- Since we consider the turtle's start facing to be north (-Z), we know that the branches on the right side of the tunnel
