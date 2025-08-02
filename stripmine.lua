@@ -570,10 +570,6 @@ local function lazy_moveto(pos)
   end)
 end
 
---lazy_moveto({x=-1, y=0,z=-1})
-
---sleep(1)
-
 local function lazy_mineto(pos)
   local success = mine_to(pos)
   if not success then
