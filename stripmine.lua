@@ -58,7 +58,16 @@ local FACINGS = {
 ---@type stripmine.Position
 local position = {x = 0, y = 0, z = 0}
 
+--- We need to keep track of whether or not we are returning home, so we don't run the `checks` again.
+local returning = false
 
+--- We keep track of what row we are on in the mine, so we can offset our position correctly when we return back to the mine.
+local mine_row = 0
+
+--- The side of the mine that we are currently on.
+--- Main being the main tunnel before the branches.
+---@type "left"|"right"|"main"
+local mine_side = "main"
 
 --- Simulates a movement in the given direction, returns the new position.
 ---@param direction "forward"|"back" The direction to simulate the movement in.
@@ -138,6 +147,7 @@ local function forward()
   end
 
   checks()
+  sleep(0.25) -- Slow it down just a bit, test world goin too fast
 
   return success, reason
 end
@@ -251,6 +261,80 @@ end
 
 
 
+--- Locate the first empty slot in an inventory.
+---@param list ccTweaked.peripheral.itemList The list of items in the inventory.
+---@param inv ccTweaked.peripheral.Inventory The inventory to search in.
+---@return integer? slot The slot number of the first empty slot, or nil if no empty slot is found.
+local function find_empty_slot(list, inv)
+  for slot = 1, inv.size() do
+    if not list[slot] then
+      return slot
+    end
+  end
+end
+
+
+
+--- Moves an item in a given inventory to the first slot, moving that item out of the way if needed.
+---@param list ccTweaked.peripheral.itemList The list of items in the inventory.
+---@param inv ccTweaked.peripheral.Inventory The inventory to move the item in.
+---@param slot integer The slot of the item to move.
+---@return boolean success Whether or not the item was successfully moved.
+local function move_to_one(list, inv, slot)
+  if not list[slot] then
+    return false
+  end
+
+  -- If the item is already in the first slot, do nothing.
+  if slot == 1 then
+    return true
+  end
+
+  -- Check if an item is already in the first slot.
+  if list[1] then
+    -- If so, we need to move it out of the way.
+    local empty_slot = find_empty_slot(list, inv)
+    if not empty_slot then
+      return false -- No empty slot found, can't move the item.
+    end
+
+    -- Move the item in the first slot to the empty slot.
+    inv.pushItems(peripheral.getName(inv), 1, nil, empty_slot)
+  end
+
+  -- Now we can move the item to the first slot.
+  inv.pushItems(peripheral.getName(inv), slot, nil, 1)
+  return true
+end
+
+
+
+--- Grabs up to a 64 stack of torches.
+local function grab_torches()
+  local function _grab(dir)
+    local inv = peripheral.wrap(dir) --[[@as ccTweaked.peripheral.Inventory?]]
+    if not inv then return false end
+    local list = inv.list()
+    for slot, item in pairs(list) do
+      if item.name == "minecraft:torch" and item.count > 0 then
+        move_to_one(list, inv, slot)
+        if dir == "top" then
+          turtle.suckUp()
+        else
+          turtle.suck()
+        end
+        return true
+      end
+    end
+  end
+
+  if not peripheral.hasType("top", "inventory") or not _grab("top") then
+    _grab("front") -- Try to grab from the front if top is not available.
+  end
+end
+
+
+
 --- Refuels the turtle from inventories at the home position (0,0,0).
 ---@param minimum_fuel integer The minimum amount of fuel the turtle should have after refueling.
 ---@return boolean can_continue Whether or not the turtle can continue after refueling.
@@ -276,51 +360,6 @@ local function refuel(minimum_fuel)
     fuel_item_lookup[item] = true
   end
 
-
-  --- Locate the first empty slot in an inventory.
-  ---@param list ccTweaked.peripheral.itemList The list of items in the inventory.
-  ---@param inv ccTweaked.peripheral.Inventory The inventory to search in.
-  ---@return integer? slot The slot number of the first empty slot, or nil if no empty slot is found.
-  local function find_empty_slot(list, inv)
-    for slot = 1, inv.size() do
-      if not list[slot] then
-        return slot
-      end
-    end
-  end
-
-  --- Moves an item in a given inventory to the first slot, moving that item out of the way if needed.
-  ---@param list ccTweaked.peripheral.itemList The list of items in the inventory.
-  ---@param inv ccTweaked.peripheral.Inventory The inventory to move the item in.
-  ---@param slot integer The slot of the item to move.
-  ---@return boolean success Whether or not the item was successfully moved.
-  local function move_to_one(list, inv, slot)
-    if not list[slot] then
-      return false
-    end
-
-    -- If the item is already in the first slot, do nothing.
-    if slot == 1 then
-      return true
-    end
-
-    -- Check if an item is already in the first slot.
-    if list[1] then
-      -- If so, we need to move it out of the way.
-      local empty_slot = find_empty_slot(list, inv)
-      if not empty_slot then
-        return false -- No empty slot found, can't move the item.
-      end
-
-      -- Move the item in the first slot to the empty slot.
-      inv.pushItems(peripheral.getName(inv), 1, nil, empty_slot)
-    end
-
-    -- Now we can move the item to the first slot.
-    inv.pushItems(peripheral.getName(inv), slot, nil, 1)
-    return true
-  end
-
   --- Attempts to refuel by 'eating' all fuel items in the turtle's inventory.
   local function eat()
     for i = 1, 16 do
@@ -330,6 +369,7 @@ local function refuel(minimum_fuel)
         turtle.refuel()
       end
     end
+    turtle.select(1)
   end
 
 
@@ -377,6 +417,87 @@ end
 
 
 
+--- Move using the given function `f` (i.e: forward, etc), calling the callbacks as needed.
+---@param f fun():boolean, string The function to call to move the turtle.
+---@param move_callback fun(pos:stripmine.Position):nil The callback function to call before each move.
+---@param move_fail_callback nil|fun(pos:stripmine.Position, reason:string):boolean The callback function to call if a move fails. If no callback is present, the function will return immediately. If the callback returns a falsey value, the function will return immediately.
+local function move(f, move_callback, move_fail_callback)
+  move_callback(position)
+
+  local success, reason = f()
+  if not success and move_fail_callback then ---@cast reason -nil
+    return move_fail_callback(position, reason)
+  end
+
+  return success, reason
+end
+
+
+
+--- Aligns the X axis of the turtle to the given position.
+---@param offset integer The X coordinate to align to.
+local function align_x(offset, move_callback, move_fail_callback)
+  while position.x < offset do
+    face(FACINGS.POSX)
+    local ok, err = move(forward, move_callback, move_fail_callback)
+    if not ok then
+      return false, err, position
+    end
+  end
+  while position.x > offset do
+    face(FACINGS.NEGX)
+    local ok, err = move(forward, move_callback, move_fail_callback)
+    if not ok then
+      return false, err, position
+    end
+  end
+  return true
+end
+
+
+
+--- Aligns the Z axis of the turtle to the given position.
+---@param offset integer The Z coordinate to align to.
+local function align_z(offset, move_callback, move_fail_callback)
+  while position.z < offset do
+    face(FACINGS.POSZ)
+    local ok, err = move(forward, move_callback, move_fail_callback)
+    if not ok then
+      return false, err, position
+    end
+  end
+  while position.z > offset do
+    face(FACINGS.NEGZ)
+    local ok, err = move(forward, move_callback, move_fail_callback)
+    if not ok then
+      return false, err, position
+    end
+  end
+  return true
+end
+
+
+
+--- Aligns the Y axis of the turtle to the given position.
+---@param offset integer The Y coordinate to align to.
+local function align_y(offset, move_callback, move_fail_callback)
+  while position.y < offset do
+    local ok, err = move(up, move_callback, move_fail_callback)
+    if not ok then
+      return false, err, position
+    end
+  end
+  while position.y > offset do
+    local ok, err = move(down, move_callback, move_fail_callback)
+    if not ok then
+      return false, err, position
+    end
+  end
+  return true
+end
+
+
+
 --- Moves to a position relative to the turtle's starting position, moving along the Y axis first, then the X and Z axes.
 ---@param offset stripmine.Position The offset to move to.
 ---@param move_callback fun(pos:stripmine.Position):nil The callback function to call before each move.
@@ -385,68 +506,20 @@ end
 ---@return string? reason The reason for failure, if any.
 ---@return stripmine.Position? final_position The final position of the turtle after the move, if failed.
 local function move_to_yxz(offset, move_callback, move_fail_callback)
-  --- Move using the given function `f` (i.e: forward, etc), calling the callbacks as needed.
-  local function move(f)
-    move_callback(position)
-
-    local success, reason = f()
-    if not success and move_fail_callback then ---@cast reason -nil
-      return move_fail_callback(position, reason)
-    end
-
-    return success, reason
+  -- Align Y first, then X, then Z.
+  local success, reason, final_pos = align_y(offset.y, move_callback, move_fail_callback)
+  if not success then
+    return false, reason, final_pos
   end
 
-  -- # Handle Y movement.
-  -- 1 - Move up if below the target.
-  while position.y < offset.y do
-    local ok, err = move(up)
-    if not ok then
-      return false, err, position
-    end
-  end
-  -- 2 - Move down if above the target.
-  while position.y > offset.y do
-    local ok, err = move(down)
-    if not ok then
-      return false, err, position
-    end
+  success, reason, final_pos = align_x(offset.x, move_callback, move_fail_callback)
+  if not success then
+    return false, reason, final_pos
   end
 
-  -- # Handle X movement.
-  -- 1 - Move +x if 'below' the target.
-  while position.x < offset.x do
-    face(FACINGS.POSX)
-    local ok, err = move(forward)
-    if not ok then
-      return false, err, position
-    end
-  end
-  -- 2 - Move -x if 'above' the target.
-  while position.x > offset.x do
-    face(FACINGS.NEGX)
-    local ok, err = move(forward)
-    if not ok then
-      return false, err, position
-    end
-  end
-
-  -- # Handle Z movement.
-  -- 1 - Move +z if 'below' the target.
-  while position.z < offset.z do
-    face(FACINGS.POSZ)
-    local ok, err = move(forward)
-    if not ok then
-      return false, err, position
-    end
-  end
-  -- 2 - Move -z if 'above' the target.
-  while position.z > offset.z do
-    face(FACINGS.NEGZ)
-    local ok, err = move(forward)
-    if not ok then
-      return false, err, position
-    end
+  success, reason, final_pos = align_z(offset.z, move_callback, move_fail_callback)
+  if not success then
+    return false, reason, final_pos
   end
 
   -- Great success!
@@ -455,14 +528,47 @@ end
 
 
 
+--- Moves to a position relative to the turtle's starting position, moving along the Y axis first, then the Z and X axes.
+---@param offset stripmine.Position The offset to move to.
+---@param move_callback fun(pos:stripmine.Position):nil The callback function to call before each move.
+---@param move_fail_callback nil|fun(pos:stripmine.Position, reason:string):boolean The callback function to call if a move fails. If no callback is present, the function will return immediately. If the callback returns a falsey value, the function will return immediately.
+---@return boolean success Whether or not the turtle successfully moved to the position.
+---@return string? reason The reason for failure, if any.
+---@return stripmine.Position? final_position The final position of the turtle after the move, if failed.
+local function move_to_yzx(offset, move_callback, move_fail_callback)
+  -- Align Y first, then Z, then X.
+  local success, reason, final_pos = align_y(offset.y, move_callback, move_fail_callback)
+  if not success then
+    return false, reason, final_pos
+  end
+
+  success, reason, final_pos = align_z(offset.z, move_callback, move_fail_callback)
+  if not success then
+    return false, reason, final_pos
+  end
+
+  success, reason, final_pos = align_x(offset.x, move_callback, move_fail_callback)
+  if not success then
+    return false, reason, final_pos
+  end
+
+  -- Great success!
+  return true
+end
+
 --- Simple method to move the turtle to 0,0,0 and face south (towards the storage chest).
 ---@return boolean success Whether or not the turtle successfully moved to the home position.
 ---@return string? error_message If it failed.
 ---@return stripmine.Position? final_position The final position of the turtle after the move, if failed.
 local function return_home()
-  ---@TODO If we're returning home while moving towards the central shaft, it means we likely have blocks in our way!
-  ---@TODO We can either handle this by digging the blocks in our way, or by moving to the side one block, then continuing.
-  ---@TODO Determine the above.
+  -- If we're digging the middle row (going towards the center), we need to move to the north.
+  if mine_row == 2 then
+    -- Move to the north, so we can return home.
+    local success, reason = move_to_yxz({x = position.x, y = position.y, z = position.z - 1}, function() end)
+    if not success then
+      return false, reason, position
+    end
+  end
 
   -- Move to the home position (0,0,0).
   local success, reason, final_pos = move_to_yxz({x = 0, y = 0, z = 0}, function() end, function() return false end)
@@ -496,27 +602,35 @@ local function dump_inventory()
   end
 
   turtle.select(1)
+  grab_torches() -- ensure we have torches after dumping the inventory.
 end
-
 
 
 --- Runs all checks, returns home for fuel or full inventory if needed.
 checks = function()
+  -- We don't need to run the inventory/fuel checks if we are already returning home.
+  if returning then return end
+
   local manhattan_distance = math.abs(position.x) + math.abs(position.y) + math.abs(position.z)
   local fuel = turtle.getFuelLevel()
   local current_facing = facing
   local current_position = {x = position.x, y = position.y, z = position.z}
-
-  local function back()
-    assert(move_to_yxz({x = 0, y = 0, z = 0}, function() end, function() return false end))
-    assert(face(FACINGS.SOUTH)) -- Face south (towards the storage chest).
+  local function go_back()
+    if mine_row == 2 then
+      -- We need to move one to the north of the current position, then return to the current position.
+      assert(move_to_yzx({x = current_position.x, y = current_position.y, z = current_position.z - 1}, function() end))
+    end
+    assert(move_to_yzx(current_position, function() end))
+    assert(face(current_facing)) -- Face south (towards the storage chest).
   end
 
   -- If the turtle is low on fuel, return home, then return back to the current position and continue.
-  if manhattan_distance >= fuel + 10 then -- We keep a buffer of at least 10 extra fuel, in case we somehow miscalculated.
+  if fuel <= manhattan_distance + 10 then -- We keep a buffer of at least 10 extra fuel, in case we somehow miscalculated.
+    returning = true
     assert(return_home())
-    assert(refuel(manhattan_distance + 100)) -- Refuel to at least the distance we need to travel, plus a buffer of 100 fuel.
-    back() -- Return to the position we were at before.
+    assert(refuel(manhattan_distance + 100), "Not enough fuel to continue.") -- Refuel to at least the distance we need to travel, plus a buffer of 100 fuel.
+    returning = false
+    go_back() -- Return to the position we were at before.
     return
   end
 
@@ -524,9 +638,13 @@ checks = function()
   --   We keep the selected slot as 1, so incoming items always fill from slot 1.
   --   Thus, if any items are present in slot 16, we can assume the inventory is full.
   if turtle.getItemCount(16) > 0 then
+    returning = true
     assert(return_home())
     dump_inventory()
-    back() -- Return to the position we were at before.
+    -- We might as well refuel, since we are home.
+    refuel(manhattan_distance + 100)
+    returning = false
+    go_back() -- Return to the position we were at before.
     return
   end
 end
@@ -589,12 +707,18 @@ local function mine_to(offset, place_torches, torch_interval)
   --- Counts the number of failed movements. If we fail to move too many times, we give up so we don't infinitely loop.
   local fail_count = 0
   local mined = 0
+  local first = true
 
   --- Called before the turtle moves in each position.
   --- 1. Digs around the turtle.
   --- 2. Places a torch if needed.
   local function mine_move_callback()
-    dig_around()
+    if first then
+      first = false
+      turtle.dig()
+    else
+      dig_around()
+    end
 
     if place_torches and (mined - 1) % torch_interval == 0 then
       place_torch()
@@ -663,6 +787,7 @@ local function dig_tunnel(length, place_torches, torch_interval)
 
   -- For each row of the tunnel, mine forward, then turn around.
   for i = 1, 3 do
+    mine_row = i
     -- Dig to the end of the row.
     if not mine_to(
       -- Mine to the simulated position
@@ -682,6 +807,8 @@ local function dig_tunnel(length, place_torches, torch_interval)
       end
     end
   end
+
+  mine_row = 0 -- Reset the mine row after digging the tunnel.
 
   return true
 end
@@ -743,6 +870,7 @@ local function dig_stripmine(length, branch_length, branch_distance, place_torch
   -- And now, we can dig the branches.
 
   -- First, the right side, deep to shallow.
+  mine_side = "right"
   for i = branch_count, 1, -1 do
     local branch_pos = get_branch_pos(i, 2) -- Right side is +X (2)
     if not move_to_yxz(branch_pos, function() end, function() return false end) then
@@ -757,6 +885,7 @@ local function dig_stripmine(length, branch_length, branch_distance, place_torch
   end
 
   -- Mine the left side, shallow to deep.
+  mine_side = "left"
   for i = 1, branch_count do
     local branch_pos = get_branch_pos(i, 0) -- Left side is -X
     if not move_to_yxz(branch_pos, function() end, function() return false end) then
@@ -774,7 +903,44 @@ local function dig_stripmine(length, branch_length, branch_distance, place_torch
   return move_to_yxz({x=0, y=0,z=0}, function() end, function() return false end)
 end
 
+
+
 --#endregion Turtle Mining Utilities
+
+
+local ui_win = window.create(term.current(), 1, 1, term.getSize())
+term.redirect(ui_win)
+
+--- Basic user interface to display simple data about the turtle's state.
+local function ui()
+  ui_win.setVisible(false)
+  ui_win.clear()
+  ui_win.setCursorPos(1, 1)
+
+  print("Turtle State:")
+  print("  Position:", position.x, position.y, position.z)
+  print("  Facing:", facing == 0 and "North" or facing == 1 and "East" or facing == 2 and "South" or "West")
+  print("  Fuel Level:", turtle.getFuelLevel())
+  print("  Distance  :", math.abs(position.x) + math.abs(position.y) + math.abs(position.z))
+  print("  Inventory:")
+  local count = 0
+  local used_slots = 0
+  for i = 1, 16 do
+    local item = turtle.getItemDetail(i)
+    if item then
+      count = count + 1
+      used_slots = used_slots + 1
+    end
+  end
+  print("    Used Slots:", used_slots)
+  print("    Item Count:", count)
+  print()
+  print("  Returning:", returning and "Yes" or "No")
+  print("  Mine Row:", mine_row)
+  print("  Mine Side:", mine_side)
+
+  ui_win.setVisible(true)
+end
 
 
 
@@ -796,8 +962,22 @@ local function lazy_mineto(pos)
   end
 end
 
-dig_stripmine(17, 10, 4, true, 5)
 
--- Return home
-lazy_moveto({x=0, y=0,z=0})
-face(FACINGS.NORTH)
+sleep(5)
+parallel.waitForAny(
+  function()
+    turtle.select(1) -- Ensure we start with the first slot selected.
+    sleep(1)
+    dig_stripmine(17, 10, 4, true, 5)
+
+    -- Return home
+    lazy_moveto({x=0, y=0,z=0})
+    face(FACINGS.NORTH)
+  end,
+  function()
+    while true do
+      ui()
+      sleep(1)
+    end
+  end
+)
