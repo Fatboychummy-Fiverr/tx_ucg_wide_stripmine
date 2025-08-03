@@ -26,15 +26,11 @@ local use_diffs = false
 -- You can also use "all" to include all files.
 -- # Note: Diffs are resolved breadth-first.
 -- # You can use ranges to include multiple files (i.e: '+1-3' to include 1 to 3).
-local diffs = {}
---[[
-  What version do you wish to install?
-  - lib_only
-  - tests
-  - all
-  - all_but_one
-  >
-]]
+local diffs = {
+  all = {
+    "+1", -- stripmine.lua
+  },
+}
 
 -- #########################################
 
