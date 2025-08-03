@@ -48,4 +48,9 @@ Note that multiple options can be combined, i.e: `stripmine.lua -trd` would enab
 
 ## Installation
 
-To be filled in once github is set to public.
+Run the following command in the shell:
+```
+wget run https://raw.githubusercontent.com/Fatboychummy-Fiverr/tx_ucg_wide_stripmine/refs/heads/main/installer.lua
+```
+
+Follow the prompts (press 'y') to install the program. The installer will download anything needed.
