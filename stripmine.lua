@@ -81,10 +81,10 @@ parser.add_flag("d", "debug", "Enable debug logging.")
 parser.add_flag("r", "resume", "Resume a previously saved stripmine run.")
 parser.add_flag("t", "torches", "Place torches in the tunnel.")
 parser.add_flag("h", "help", "Show this help message and exit.")
-parser.add_option("torch_interval", "The distance between torches placed in the tunnel.", 10)
+parser.add_option("torchinterval", "The distance between torches placed in the tunnel.", 10)
 parser.add_option("length", "The length of the main tunnel to dig.", 16)
-parser.add_option("branch_length", "The length of the branches to dig.", 8)
-parser.add_option("branch_distance", "The distance between branches.", 5)
+parser.add_option("branchlength", "The length of the branches to dig.", 8)
+parser.add_option("branchdistance", "The distance between branches.", 5)
 local parsed = parser.parse(arg)
 local _args = {...}
 
@@ -1414,11 +1414,11 @@ local function main()
     log.info("Debug mode enabled")
   end
   log.infof("Length: %d", parsed.options.length or 16)
-  log.infof("Branch length: %d", parsed.options.branch_length or 8)
-  log.infof("Branch distance: %d", parsed.options.branch_distance or 4)
+  log.infof("Branch length: %d", parsed.options.branchlength or 8)
+  log.infof("Branch distance: %d", parsed.options.branchdistance or 4)
   if parsed.flags.torches then
     log.info("Torches enabled")
-    log.infof("Torch interval: %d", parsed.options.torch_interval or 10)
+    log.infof("Torch interval: %d", parsed.options.torchinterval or 10)
   end
   sleep(2) -- Allow user to see the initial messages.
 
@@ -1432,10 +1432,10 @@ local function main()
 
   dig_stripmine(
     parsed.options.length or 16,
-    parsed.options.branch_length or 8,
-    parsed.options.branch_distance or 4,
+    parsed.options.branchlength or 8,
+    parsed.options.branchdistance or 4,
     parsed.flags.torches,
-    parsed.options.torch_interval or 10
+    parsed.options.torchinterval or 10
   )
   --dig_stripmine(17, 10, 4, true, 5)
 
