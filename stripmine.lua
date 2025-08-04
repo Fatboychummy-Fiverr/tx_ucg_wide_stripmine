@@ -103,13 +103,17 @@ end
 
 
 local SAVE_FILE = "stripmine_state.lson"
+local OLD_SAVE_FILE = "old_stripmine_state.lson"
 local data_dir = program_path:at("data")
 local state_file = data_dir:file(SAVE_FILE)
+local old_state_file = data_dir:file(OLD_SAVE_FILE)
 
 local term_x, term_y = term.getSize()
 local ui_win = window.create(term.current(), 1, 1, term_x, term_y - 9)
 local log_win = window.create(term.current(), 1, term_y - 8, term_x, 9)
 minilogger.set_log_window(log_win)
+
+local orig_term = term.current()
 
 local log = minilogger.new("stripmine")
 local r_log = minilogger.new("recovery")
@@ -1381,7 +1385,7 @@ end
 
 
 local startup_folder = filesystem:absolute("startup")
-local recovery_file = startup_folder:file("startup/99999_fatboychummy_stripmine_recovery.lua")
+local recovery_file = startup_folder:file("99999_fatboychummy_stripmine_recovery.lua")
 
 --- Builds the recovery program.
 local function build_recovery_program()
@@ -1408,6 +1412,13 @@ end
 
 local function main()
   turtle.select(1) -- Ensure we start with the first slot selected.
+
+  if turtle.getFuelLevel() == 0 then
+    face(FACINGS.SOUTH)
+    refuel(1)
+    face(FACINGS.NORTH)
+    saved_data.moves_completed = 0
+  end
 
   log.info("Starting...")
   if parsed.flags.debug then
@@ -1446,6 +1457,7 @@ local function main()
 
   -- Destroy the recover program, as we no longer need it.
   destroy_recovery_program()
+  state_file:delete() -- Delete the state file, as we no longer need it.
 end
 
 local function handle_ui()
@@ -1463,12 +1475,24 @@ local ok, err = xpcall(
     handle_ui
 )
 
-if not ok then
+if not ok then ---@cast err -nil
   log.fatalf("An error occurred:\n%s", err)
   log.fatal("Please report this issue to the developer.")
   log.fatal("Attempting to return home...")
   pcall(return_home)
   pcall(destroy_recovery_program)
+  pcall(old_state_file.delete, old_state_file)
+  pcall(state_file.moveTo, state_file, old_state_file)
+
+  term.redirect(orig_term)
+  term.setBackgroundColor(colors.black)
+  term.setTextColor(colors.white)
+  term.clear()
+  term.setCursorPos(1, 1)
+  print("An error occurred while running the program:\n")
+  printError(err:match("^(.-)\n"))
+  print()
+  print("Check", program_path .. "logs/latest.log", "for more details.")
 end
 
 
