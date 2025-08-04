@@ -2,7 +2,7 @@
 
 This program is designed to create a 3x3 stripmine in Minecraft using ComputerCraft. It includes features for recovery, inventory management, and customizable parameters.
 
-This program was commissioned by tx_ucg on [Fiverr](https://www.fiverr.com/fatboychummy).
+This program was commissioned by UCG on [Fiverr](https://www.fiverr.com/fatboychummy).
 
 ![Example image](images/mine.png)
 
