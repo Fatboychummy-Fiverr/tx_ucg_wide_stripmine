@@ -4,7 +4,7 @@ local to_get = {
   "extern:stripmine.lua:https://raw.githubusercontent.com/Fatboychummy-Fiverr/tx_ucg_wide_stripmine/refs/heads/main/stripmine.lua",
 }
 local program_name = "3x3 Stripmine"
-local pinestore_id = nil -- Set this to the ID of the pinestore project if you wish to note to pinestore that a download has occurred.
+local pinestore_id = 177
 
 
 -- #################
