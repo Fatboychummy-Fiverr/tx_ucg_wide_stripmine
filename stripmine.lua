@@ -144,7 +144,9 @@ local FACINGS = {
 
 --- Saved data.
 local saved_data = {}
-local no_save = false
+
+--- Used to prevent saving state while recovering from a reset, among a few other things to do with state recovery.
+local recovering = false
 
 --- The current facing of the turtle, north being `-Z` (0).
 --- Note that this is relative to the turtle's starting facing (i.e: The starting direction of the turtle is considered to be 'north').
@@ -158,8 +160,10 @@ saved_data.position = {x = 0, y = 0, z = 0}
 --- We need to keep track of whether or not we are returning home, so we don't run the `checks` again.
 saved_data.returning = false
 
---- Locks out history tracking while returning home (and back to the mine).
-saved_data.history_lock = false
+--- The list of move numbers in which the turtle decided to return home.
+--- Used to aid in history tracking.
+---@type integer[]
+saved_data.return_moves = {}
 
 --- The amount of moves completed. Since the shape is deterministic, this is the only information we
 --- actually need to save in order to restore the turtle's state after a reset.
@@ -182,10 +186,6 @@ saved_data.fuel_level = turtle.getFuelLevel()
 --- Stores the last action the turtle performed, aids restoration of data like fuel_level.
 ---@type stripmine.Actions
 saved_data.last_action = "startup"
-
---- Stores the last position before returning home.
----@type stripmine.Position
-saved_data.last_position = {x = 0, y = 0, z = 0}
 
 
 
@@ -257,7 +257,7 @@ local sl_log = minilogger.new("saveload")
 --- Saves the current state of the turtle.
 ---@param action stripmine.Actions The action the turtle is currently performing.
 local function save_state(action)
-  if no_save then return end
+  if recovering then return end
   saved_data.last_action = action
   saved_data.fuel_level = turtle.getFuelLevel()
 
@@ -296,6 +296,20 @@ local function load_state()
   end
   if type(data.last_action) ~= "string" then
     error("Invalid last_action data in turtle state.", 0)
+  end
+  if type(data.facing) ~= "number" then
+    error("Invalid facing data in turtle state.", 0)
+  end
+  if type(data.returning) ~= "boolean" then
+    error("Invalid returning data in turtle state.", 0)
+  end
+  if type(data.return_moves) ~= "table" then
+    error("Invalid return_moves data in turtle state.", 0)
+  end
+  for _, move in ipairs(data.return_moves) do
+    if type(move) ~= "number" then
+      error("Invalid move in return_moves data in turtle state.", 0)
+    end
   end
 
   r_log.debugf("State was: %s", textutils.serialize(data))
@@ -347,9 +361,7 @@ local function forward()
   local success, reason = turtle.forward()
   if success then
     update_position("forward")
-    if not saved_data.history_lock then
-      saved_data.moves_completed = saved_data.moves_completed + 1
-    end
+    saved_data.moves_completed = saved_data.moves_completed + 1
   end
   save_state("done")
 
@@ -368,11 +380,9 @@ local function back()
   local success, reason = turtle.back()
   if success then
     update_position("back")
-    if not saved_data.history_lock then
-      saved_data.moves_completed = saved_data.moves_completed + 1
-      save_state("done")
-    end
+    saved_data.moves_completed = saved_data.moves_completed + 1
   end
+  save_state("done")
 
   checks()
 
@@ -389,11 +399,9 @@ local function turn_left()
   local success, reason = turtle.turnLeft()
   if success then
     saved_data.facing = (saved_data.facing - 1) % 4 -- Update facing direction, wrap around using modulo
-    if not saved_data.history_lock then
-      saved_data.moves_completed = saved_data.moves_completed + 1
-      save_state("done")
-    end
+    saved_data.moves_completed = saved_data.moves_completed + 1
   end
+  save_state("done")
 
   return success, reason
 end
@@ -408,11 +416,9 @@ local function turn_right()
   local success, reason = turtle.turnRight()
   if success then
     saved_data.facing = (saved_data.facing + 1) % 4 -- Update facing direction, wrap around using modulo
-    if not saved_data.history_lock then
-      saved_data.moves_completed = saved_data.moves_completed + 1
-      save_state("done")
-    end
+    saved_data.moves_completed = saved_data.moves_completed + 1
   end
+  save_state("done")
 
   return success, reason
 end
@@ -427,11 +433,9 @@ local function up()
   local success, reason = turtle.up()
   if success then
     saved_data.position.y = saved_data.position.y + 1
-    if not saved_data.history_lock then
-      saved_data.moves_completed = saved_data.moves_completed + 1
-      save_state("done")
-    end
+    saved_data.moves_completed = saved_data.moves_completed + 1
   end
+  save_state("done")
 
   checks()
 
@@ -448,11 +452,9 @@ local function down()
   local success, reason = turtle.down()
   if success then
     saved_data.position.y = saved_data.position.y - 1
-    if not saved_data.history_lock then
-      saved_data.moves_completed = saved_data.moves_completed + 1
-      save_state("done")
-    end
+    saved_data.moves_completed = saved_data.moves_completed + 1
   end
+  save_state("done")
 
   checks()
 
@@ -557,6 +559,7 @@ local function grab_torches()
     return true -- We already have enough torches, no need to grab more.
   end
 
+
   ---@return boolean success Whether or not the turtle successfully grabbed torches.
   local function _grab(dir)
     if not peripheral.hasType(dir, "inventory") then
@@ -586,6 +589,7 @@ local function grab_torches()
 
     return false
   end
+
 
   -- Prefer grabbing from the top.
   if not _grab("top") then
@@ -623,6 +627,7 @@ local function refuel(minimum_fuel)
   for _, item in ipairs(fuel_items) do
     fuel_item_lookup[item] = true
   end
+
 
   --- Attempts to refuel by 'eating' all fuel items in the turtle's inventory.
   local function eat()
@@ -674,6 +679,7 @@ local function refuel(minimum_fuel)
     -- Check if we have enough fuel to continue.
     return turtle.getFuelLevel() >= minimum_fuel
   end
+
 
   -- Prefer refuelling from the top.
   if not _refuel("top") then
@@ -870,7 +876,7 @@ local function dump_inventory()
   log.info("Dumping inventory...")
   -- Ensure we're at the home position.
   if saved_data.position.x ~= 0 or saved_data.position.y ~= 0 or saved_data.position.z ~= 0 then
-    return false, "Turtle is not at the home position (0,0,0), cannot dump inventory."
+    return
   end
 
   while not peripheral.hasType("front", "inventory") do
@@ -895,48 +901,73 @@ local function dump_inventory()
 end
 
 
+
+--- Go back to the previously saved position, and face the direction we were facing before returning home.
+---@param last_position stripmine.Position The position to return to.
+---@param last_facing stripmine.Facing The direction to face after returning.
+local function return_to_position(last_position, last_facing)
+  log.info("Returning to previous position...")
+
+  if saved_data.mine_row == 2 then
+    -- We have to go around.
+    if saved_data.mine_side == "right" then
+      -- Move to the north of the last position.
+      assert(move_to_yzx({x = last_position.x, y = last_position.y, z = last_position.z - 1}, function() end))
+    else
+      -- Move to the south of the last position.
+      assert(move_to_yzx({x = last_position.x, y = last_position.y, z = last_position.z + 1}, function() end))
+    end
+  end
+  assert(move_to_yzx(last_position, function() end))
+  assert(face(last_facing))
+
+  log.okay("Returned to previous position successfully.")
+end
+
+
+
+--- Returns home, drops off items, refuels, collects torches, then returns back to the current position.
+local function home_trip()
+  local manhattan_distance = math.abs(saved_data.position.x) + math.abs(saved_data.position.y) + math.abs(saved_data.position.z)
+  local current_facing = saved_data.facing
+  local current_position = {x = saved_data.position.x, y = saved_data.position.y, z = saved_data.position.z}
+  log.infof("Returning home, current position: %d %d %d, facing: %d", current_position.x, current_position.y, current_position.z, current_facing)
+
+  -- Store the current move count so we can use it in recovery if needed.
+  table.insert(saved_data.return_moves, saved_data.moves_completed)
+
+  -- Return home, marking that we are doing so so we don't run the checks again.
+  saved_data.returning = true
+  assert(return_home(), "Failed to return home.")
+  saved_data.returning = false
+
+  -- Dump the inventory into the storage chest.
+  dump_inventory()
+
+  -- Refuel the turtle to at least the distance we need to travel, plus a buffer of 100 fuel.
+  refuel(manhattan_distance + 100)
+
+  -- Grab torches from the storage chest, if needed.
+  while parsed.flags.torches and not grab_torches() do
+    log.warn("Failed to grab torches, retrying in 5 seconds...")
+    sleep(5)
+  end
+
+  -- Return to the position we were at before.
+  return_to_position(current_position, current_facing)
+end
+
+
+
 --- Runs all checks, returns home for fuel or full inventory if needed.
 checks = function()
   -- We don't need to run the inventory/fuel checks if we are already returning home.
   if saved_data.returning then return end
-  -- We also don't need to run the checks if we are recovering history.
-  if saved_data.history_lock then return end
+  -- If we are recovering from a reset, we don't need to run the checks either.
+  if recovering then return end
 
   local manhattan_distance = math.abs(saved_data.position.x) + math.abs(saved_data.position.y) + math.abs(saved_data.position.z)
   local fuel = turtle.getFuelLevel()
-  local current_facing = saved_data.facing
-  local current_position = {x = saved_data.position.x, y = saved_data.position.y, z = saved_data.position.z}
-
-  --- Returns the turtle back to the position it was at before returning home.
-  local function go_back()
-    if saved_data.mine_row == 2 then
-      if saved_data.mine_side == "right" then
-        -- We need to move one to the north of the current position, then return to the current position.
-        assert(move_to_yzx({x = current_position.x, y = current_position.y, z = current_position.z - 1}, function() end))
-      else
-        -- We need to move one to the south of the current position, then return to the current position.
-        assert(move_to_yzx({x = current_position.x, y = current_position.y, z = current_position.z + 1}, function() end))
-      end
-    end
-    assert(move_to_yzx(current_position, function() end))
-    assert(face(current_facing)) -- Face south (towards the storage chest).
-  end
-
-  --- Returns home, drops off items, refuels, collects torches, then returns back to the current position.
-  local function home_trip()
-    saved_data.returning = true
-    saved_data.history_lock = true -- Lock out history tracking while returning home.
-    assert(return_home(), "Failed to return home.")
-    saved_data.returning = false
-    dump_inventory() -- Dump the inventory into the storage chest.
-    refuel(manhattan_distance + 100) -- Refuel to at least the distance we need to travel, plus a buffer of 100 fuel.
-    while parsed.flags.torches and not grab_torches() do -- Grab torches from the storage chest.
-      log.warn("Failed to grab torches, retrying in 5 seconds...")
-      sleep(5)
-    end
-    go_back() -- Return to the position we were at before.
-    saved_data.history_lock = false -- Unlock history tracking after returning home.
-  end
 
   -- We keep a buffer of at least 10 extra fuel, in case we somehow miscalculated.
   if fuel <= manhattan_distance + 10 then
@@ -1268,7 +1299,7 @@ local function ui()
   term.setCursorPos(term_x - #facing, 3)
   term.write(facing)
 
-  local status_message = saved_data.returning and "Returning Home" or saved_data.history_lock and "Returning to Mine" or "Mining"
+  local status_message = saved_data.returning and "Returning Home" or "Mining"
   term.setCursorPos(term_x - #status_message, 1)
   term.write(status_message)
 
@@ -1287,70 +1318,21 @@ local function prepare_load()
   load_state()
   local cached_position = {x = saved_data.position.x, y = saved_data.position.y, z = saved_data.position.z}
   local cached_facing = saved_data.facing
+  local cached_moves_completed = saved_data.moves_completed
+  local cached_returns = saved_data.return_moves
+
+  local returns_lookup = {}
+  for _, return_move in ipairs(cached_returns) do
+    returns_lookup[return_move] = true
+  end
+  local returning = false
 
   local old_turtle = turtle
-  _G.turtle = nil -- Remove the turtle from the global namespace to prevent accidental use.
-  local was_locked = saved_data.history_lock -- Save the current history lock state.
-  r_log.debug("History locked -- we were returning home or to the mine.")
-  saved_data.history_lock = true -- Lock the history to prevent it from being modified while we simulate movements.
-  no_save = true -- Disable saving while we simulate movements.
+  _G.turtle = nil -- Remove turtle from the global namespace to prevent accidental use.
+  recovering = true -- Disable saving while we simulate movements.
 
-  local recover
 
-  --- If we were in the process of returning home, we need to restore the turtle's actual state, so simulate returning home,
-  --- then returning to the mine.
-  local function extended_recover()
-    r_log.info("Extended recovery active")
-    parallel.waitForAny(
-      return_home,
-      function()
-        while true do
-          os.pullEvent("turtle_response")
-          if saved_data.position.x == cached_position.x and
-             saved_data.position.y == cached_position.y and
-             saved_data.position.z == cached_position.z and
-             saved_data.facing == cached_facing then
-            r_log.okay("Returned to the mine successfully.")
-
-            -- We need to recover mid return, so that the position is correct.
-            recover(true)
-          end
-        end
-      end
-    )
-  end
-
-  recover = function(override)
-    r_log.info("Recovering...")
-    if was_locked and not override then
-      -- We were returning home (or returning back from the mine)!
-      return extended_recover()
-    end
-
-    saved_data.history_lock = was_locked -- Restore the history lock state.
-    no_save = false -- Re-enable saving.
-
-    turtle = old_turtle
-    saved_data.moves_completed = saved_data.moves_completed - 1
-
-    r_log.okay("Recovery complete.")
-  end
-
-  local fake_moves = 0
-  local function fake_move()
-    fake_moves = fake_moves + 1
-    r_log.infof("sim: %d/%d", fake_moves, saved_data.moves_completed)
-    if fake_moves >= saved_data.moves_completed then
-      recover()
-    end
-    return true
-  end
-
-  -- Reset the turtle's data so it can simulate appropriately.
-  saved_data.position.x = 0
-  saved_data.position.y = 0
-  saved_data.position.z = 0
-  saved_data.facing = 0 -- Facing north by default.
+  r_log.info("Preparing turtle for simulation...")
 
   -- Overrides all turtle functions to just return true, simulating everything being successful.
   local _turtle = setmetatable({}, {
@@ -1358,6 +1340,59 @@ local function prepare_load()
       return function() return true end
     end
   })
+
+
+  local function recover()
+    r_log.info("Simulation complete, recovering...")
+
+    recovering = false
+    turtle = old_turtle
+    saved_data.moves_completed = saved_data.moves_completed - 1 ---@TODO Check if this is correct.
+
+    r_log.okay("Recovery complete.")
+  end
+
+
+  local function fake_move()
+    r_log.infof("sim: %d/%d%s", saved_data.moves_completed, cached_moves_completed, cached_returns[saved_data.moves_completed] and ": !RETURN!" or "")
+
+    -- If we have simulated the moves needed, we can recover.
+    if saved_data.moves_completed >= cached_moves_completed then
+      recover()
+    end
+
+    -- Check if this move triggered a return home.
+    if returns_lookup[saved_data.moves_completed] then
+      r_log.info("Return home")
+      returning = true
+
+      -- "queue" a return home by pretending to be extremely low on fuel.
+      _turtle.getFuelLevel = function()
+        return 1 -- Simulate being very low on fuel.
+      end
+    end
+
+    if returning and saved_data.position.x == 0 and saved_data.position.y == 0 and saved_data.position.z == 0 then
+      -- We made it home, so we can reset the fuel level to a high value.
+      _turtle.getFuelLevel = function()
+        return 10000 -- Simulate a high fuel level again.
+      end
+    end
+
+    return true
+  end
+
+
+  -- Reset the turtle's data so it can simulate appropriately.
+  saved_data.position.x = 0
+  saved_data.position.y = 0
+  saved_data.position.z = 0
+  saved_data.facing = 0 -- Facing north by default.
+  saved_data.moves_completed = 0
+  saved_data.return_moves = {}
+  saved_data.returning = false
+
+
   -- Override the turtle's movement functions to simulate movements without actually moving.
   _turtle.forward = fake_move
   _turtle.back = fake_move
@@ -1365,6 +1400,7 @@ local function prepare_load()
   _turtle.down = fake_move
   _turtle.turnLeft = fake_move
   _turtle.turnRight = fake_move
+
 
   _turtle.getItemDetail = function(i)
     if i == 1 then return {name = "minecraft:torch", count = 64} end
@@ -1376,6 +1412,7 @@ local function prepare_load()
   _turtle.getFuelLimit = function()
     return 10000
   end
+
 
   _G.turtle = _turtle
 
