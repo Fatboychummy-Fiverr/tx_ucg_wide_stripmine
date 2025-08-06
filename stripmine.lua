@@ -1272,24 +1272,36 @@ local function ui()
   end
 
   term.setCursorPos(1, 1)
+  term.setTextColor(colors.white)
+  term.write("Storage: ")
   if used_slots >= 14 then
     term.setTextColor(colors.red)
   elseif used_slots >= 9 then
+    term.setTextColor(colors.orange)
+  elseif used_slots >= 5 then
     term.setTextColor(colors.yellow)
+  else
+    term.setTextColor(colors.green)
   end
-  term.write(("Storage: %d (%d)"):format(used_slots, total_items))
+  term.write(("%d (%d)"):format(used_slots, total_items))
 
   term.setCursorPos(1, 2)
+  term.setTextColor(colors.white)
+  term.write("Fuel   : ")
   local manhattan_distance = math.abs(saved_data.position.x) + math.abs(saved_data.position.y) + math.abs(saved_data.position.z)
   local fuel = turtle.getFuelLevel()
   if fuel <= manhattan_distance + 30 then
     term.setTextColor(colors.red)
   elseif fuel <= manhattan_distance + 100 then
+    term.setTextColor(colors.orange)
+  elseif fuel <= manhattan_distance + 200 then
     term.setTextColor(colors.yellow)
+  elseif fuel <= manhattan_distance + 1000 then
+    term.setTextColor(colors.green)
   else
-    term.setTextColor(colors.white)
+    term.setTextColor(colors.blue)
   end
-  term.write(("Fuel   : %d/%d"):format(turtle.getFuelLevel(), turtle.getFuelLimit()))
+  term.write(("%d/%d"):format(turtle.getFuelLevel(), turtle.getFuelLimit()))
 
   term.setCursorPos(1, 3)
   term.setTextColor(colors.white)
@@ -1316,8 +1328,7 @@ end
 --- Loads the turtle's saved state, and prepares for simulation of movements until the turtle's internal state matches the loaded state.
 local function prepare_load()
   load_state()
-  local cached_position = {x = saved_data.position.x, y = saved_data.position.y, z = saved_data.position.z}
-  local cached_facing = saved_data.facing
+
   local cached_moves_completed = saved_data.moves_completed
   local cached_returns = saved_data.return_moves
 
@@ -1416,7 +1427,7 @@ local function prepare_load()
 
   _G.turtle = _turtle
 
-  r_log.info("Simulation needs", saved_data.moves_completed)
+  r_log.info("Simulation needs", cached_moves_completed)
 end
 
 
@@ -1457,7 +1468,6 @@ local function main()
     saved_data.moves_completed = 0
   end
 
-  log.info("Starting...")
   if parsed.flags.debug then
     log.info("Debug mode enabled")
   end
@@ -1468,7 +1478,8 @@ local function main()
     log.info("Torches enabled")
     log.infof("Torch interval: %d", parsed.options.torchinterval or 10)
   end
-  sleep(2) -- Allow user to see the initial messages.
+  log.info("Starting in 3 seconds...")
+  sleep(3) -- Allow user to see the initial messages.
 
   if parsed.flags.resume then
     r_log.info("Preparing system for simulation of previous state...")
