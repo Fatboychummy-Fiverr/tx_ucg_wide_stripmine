@@ -833,6 +833,18 @@ local function move_to_yzx(offset, move_callback, move_fail_callback)
   return true
 end
 
+
+
+local function basic_move_callback(pos)
+  turtle.dig()
+end
+
+local function basic_move_fail_callback(pos, reason)
+  return turtle.dig()
+end
+
+
+
 --- Simple method to move the turtle to 0,0,0 and face south (towards the storage chest).
 ---@return boolean success Whether or not the turtle successfully moved to the home position.
 ---@return string? error_message If it failed.
@@ -844,13 +856,13 @@ local function return_home()
   if saved_data.mine_row == 2 then
     if saved_data.mine_side == "right" then
       -- Move to the north of the current postion.
-      local success, reason = move_to_yxz({x = saved_data.position.x, y = saved_data.position.y, z = saved_data.position.z - 1}, function() end)
+      local success, reason = move_to_yxz({x = saved_data.position.x, y = saved_data.position.y, z = saved_data.position.z - 1}, basic_move_callback, basic_move_fail_callback)
       if not success then
         return false, reason, saved_data.position
       end
     else
       -- Move to the south of the current position.
-      local success, reason = move_to_yxz({x = saved_data.position.x, y = saved_data.position.y, z = saved_data.position.z + 1}, function() end)
+      local success, reason = move_to_yxz({x = saved_data.position.x, y = saved_data.position.y, z = saved_data.position.z + 1}, basic_move_callback, basic_move_fail_callback)
       if not success then
         return false, reason, saved_data.position
       end
@@ -858,7 +870,7 @@ local function return_home()
   end
 
   -- Move to the home position (0,0,0).
-  local success, reason, final_pos = move_to_yxz({x = 0, y = 0, z = 0}, function() end, function() return false end)
+  local success, reason, final_pos = move_to_yxz({x = 0, y = 0, z = 0}, basic_move_callback, basic_move_fail_callback)
   if not success then ---@cast reason -nil
     return false, reason, final_pos
   end
@@ -912,13 +924,13 @@ local function return_to_position(last_position, last_facing)
     -- We have to go around.
     if saved_data.mine_side == "right" then
       -- Move to the north of the last position.
-      assert(move_to_yzx({x = last_position.x, y = last_position.y, z = last_position.z - 1}, function() end))
+      assert(move_to_yzx({x = last_position.x, y = last_position.y, z = last_position.z - 1}, basic_move_callback, basic_move_fail_callback))
     else
       -- Move to the south of the last position.
-      assert(move_to_yzx({x = last_position.x, y = last_position.y, z = last_position.z + 1}, function() end))
+      assert(move_to_yzx({x = last_position.x, y = last_position.y, z = last_position.z + 1}, basic_move_callback, basic_move_fail_callback))
     end
   end
-  assert(move_to_yzx(last_position, function() end))
+  assert(move_to_yzx(last_position, basic_move_callback, basic_move_fail_callback))
   assert(face(last_facing))
 
   log.okay("Returned to previous position successfully.")
@@ -945,7 +957,13 @@ local function home_trip()
   dump_inventory()
 
   -- Refuel the turtle to at least the distance we need to travel, plus a buffer of 100 fuel.
-  refuel(manhattan_distance + 100)
+  local fuel_needed = manhattan_distance + 100
+  log.info("Need at least", fuel_needed, "fuel to continue.")
+  while not refuel(fuel_needed) do
+    log.warn("Failed to refuel enough, retrying in 5 seconds...")
+    log.debug("Current fuel level:", turtle.getFuelLevel())
+    sleep(5)
+  end
 
   -- Grab torches from the storage chest, if needed.
   while parsed.flags.torches and not grab_torches() do
@@ -987,8 +1005,8 @@ end
 
 --- Digs around the turtle.
 local function dig_around()
+  turtle.digUp() -- Dig upwards first, this should give *some* time for gravel and such to fall on the turtle and break.
   turtle.dig()
-  turtle.digUp()
   turtle.digDown()
 end
 
